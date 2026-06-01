@@ -25,10 +25,10 @@ impl Aggregate<U256, Option<Vec<u8>>> for U256Sum {
     fn step(&self, ctx: &mut Context<'_>, acc: &mut U256) -> Result<()> {
         // `from_be_slice` panics on >32 bytes, so the length guard is required,
         // not just a correctness filter.
-        if let ValueRef::Blob(b) = ctx.get_raw(0) {
-            if b.len() == 32 {
-                *acc = acc.wrapping_add(U256::from_be_slice(b));
-            }
+        if let ValueRef::Blob(b) = ctx.get_raw(0)
+            && b.len() == 32
+        {
+            *acc = acc.wrapping_add(U256::from_be_slice(b));
         }
         Ok(())
     }

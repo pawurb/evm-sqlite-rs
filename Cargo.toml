@@ -2,6 +2,10 @@
 name = "evm-sqlite"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/pawurb/evm-sqlite-rs"
+description = "SQLite helper functions for working with EVM chains data"
+license = "MIT"
+categories = ["database"]
 
 [dependencies]
 rusqlite = { version = "0.37", features = ["bundled", "functions"] }

@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2024"
 repository = "https://github.com/pawurb/evm-sqlite-rs"
 description = "SQLite helper functions for working with EVM chains data"
+readme = "README.md"
 license = "MIT"
+keywords = ["sqlite", "evm", "ethereum", "uint256", "blockchain"]
 categories = ["database"]
 
 [dependencies]

@@ -39,9 +39,8 @@ impl Aggregate<U256, Option<Vec<u8>>> for U256Sum {
     }
 }
 
-/// Register all u256 SQLite functions on a connection. Functions are
-/// per-connection, so call this on every connection that needs them.
-pub fn register_u256_fns(conn: &Connection) -> Result<()> {
+/// Register the `u256_sum` aggregate on a connection.
+pub(crate) fn register(conn: &Connection) -> Result<()> {
     conn.create_aggregate_function(
         "u256_sum",
         1,
@@ -61,7 +60,7 @@ mod tests {
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        register_u256_fns(&conn).unwrap();
+        register(&conn).unwrap();
         conn.execute("CREATE TABLE t (x BLOB)", []).unwrap();
         conn
     }

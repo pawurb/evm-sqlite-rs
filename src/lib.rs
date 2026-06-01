@@ -1,3 +1,14 @@
-pub mod u256_fns;
+//! SQLite helper functions for working with EVM chains data.
 
-pub use u256_fns::register_u256_fns;
+mod u256_sum;
+
+use rusqlite::{Connection, Result};
+
+/// Register all of this crate's custom SQLite functions on a connection.
+///
+/// Functions are per-connection, so call this on every connection that needs
+/// them.
+pub fn register_functions(conn: &Connection) -> Result<()> {
+    u256_sum::register(conn)?;
+    Ok(())
+}

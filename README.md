@@ -1,6 +1,6 @@
 # evm-sqlite - SQLite helper functions for EVM chains data
 
-[![Latest Version](https://img.shields.io/crates/v/evm-sqlite.svg)](https://crates.io/crates/evm-sqlite) [![Downloads](https://img.shields.io/crates/d/evm-sqlite.svg)](https://crates.io/crates/evm-sqlite) [![GH Actions](https://github.com/pawurb/evm-sqlite-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/pawurb/evm-sqlite-rs/actions)
+[![Latest Version](https://img.shields.io/crates/v/evm-sqlite.svg)](https://crates.io/crates/evm-sqlite) [![GH Actions](https://github.com/pawurb/evm-sqlite-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/pawurb/evm-sqlite-rs/actions)
 
 Custom SQLite functions for exact uint256 arithmetic over big-endian BLOBs.
 

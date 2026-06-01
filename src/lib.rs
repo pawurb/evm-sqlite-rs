@@ -1,6 +1,7 @@
 //! SQLite helper functions for working with EVM chains data.
 
 mod u256_sum;
+mod u256_to_dec;
 
 use rusqlite::{Connection, Result};
 
@@ -10,5 +11,6 @@ use rusqlite::{Connection, Result};
 /// them.
 pub fn register_functions(conn: &Connection) -> Result<()> {
     u256_sum::register(conn)?;
+    u256_to_dec::register(conn)?;
     Ok(())
 }

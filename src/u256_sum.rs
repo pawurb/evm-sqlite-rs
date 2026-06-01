@@ -9,12 +9,13 @@
 use ruint::aliases::U256;
 use rusqlite::functions::{Aggregate, Context, FunctionFlags};
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, Error, Result};
 
 /// Aggregate: sum 32-byte big-endian uint256 BLOBs into a 32-byte BE BLOB.
 ///
-/// Skips `NULL` and any blob that is not exactly 32 bytes (e.g. non-transfer
-/// logs) rather than erroring. Returns SQL `NULL` when no rows matched.
+/// Skips `NULL`. Accepts any blob up to 32 bytes, left-padding shorter ones
+/// Returns SQL `NULL` when no rows matched. Raises on a blob longer than 32
+/// bytes and if the running total would exceed `U256::MAX`.
 struct U256Sum;
 
 impl Aggregate<U256, Option<Vec<u8>>> for U256Sum {
@@ -23,12 +24,21 @@ impl Aggregate<U256, Option<Vec<u8>>> for U256Sum {
     }
 
     fn step(&self, ctx: &mut Context<'_>, acc: &mut U256) -> Result<()> {
-        // `from_be_slice` panics on >32 bytes, so the length guard is required,
-        // not just a correctness filter.
-        if let ValueRef::Blob(b) = ctx.get_raw(0)
-            && b.len() == 32
-        {
-            *acc = acc.wrapping_add(U256::from_be_slice(b));
+        if let ValueRef::Blob(b) = ctx.get_raw(0) {
+            // `from_be_slice` left-pads slices <= 32 bytes but panics on >32, so
+            // reject oversized blobs loudly; they can't encode a uint256.
+            if b.len() > 32 {
+                return Err(Error::UserFunctionError(
+                    format!(
+                        "u256_sum: blob too large, expected <= 32 bytes, got {}",
+                        b.len()
+                    )
+                    .into(),
+                ));
+            }
+            *acc = acc.checked_add(U256::from_be_slice(b)).ok_or_else(|| {
+                Error::UserFunctionError("u256_sum: overflow past U256::MAX".into())
+            })?;
         }
         Ok(())
     }
@@ -89,13 +99,28 @@ mod tests {
     }
 
     #[test]
-    fn wrong_size_blob_skipped() {
+    fn short_blob_left_padded() {
         let conn = setup();
         conn.execute("INSERT INTO t VALUES (?1)", [be(7)]).unwrap();
-        // 16-byte blob: ignored, must not error or panic.
-        conn.execute("INSERT INTO t VALUES (?1)", [vec![0u8; 16]])
+        // 4-byte trimmed encoding of 5: left-padded and summed, not skipped.
+        conn.execute("INSERT INTO t VALUES (?1)", [vec![0, 0, 0, 5]])
             .unwrap();
-        assert_eq!(sum(&conn), Some(be(7)));
+        assert_eq!(sum(&conn), Some(be(12)));
+    }
+
+    #[test]
+    fn oversized_blob_raises() {
+        let conn = setup();
+        conn.execute("INSERT INTO t VALUES (?1)", [be(7)]).unwrap();
+        // 33-byte blob can't be a uint256: must raise, not skip or panic.
+        conn.execute("INSERT INTO t VALUES (?1)", [vec![0u8; 33]])
+            .unwrap();
+        let err = conn
+            .query_row("SELECT u256_sum(x) FROM t", [], |r| {
+                r.get::<_, Option<Vec<u8>>>(0)
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("too large"), "{err}");
     }
 
     #[test]
@@ -108,12 +133,28 @@ mod tests {
     }
 
     #[test]
-    fn wraps_at_u256_max() {
+    fn overflow_raises() {
         let conn = setup();
         let max = U256::MAX.to_be_bytes::<32>().to_vec();
         conn.execute("INSERT INTO t VALUES (?1)", [max]).unwrap();
         conn.execute("INSERT INTO t VALUES (?1)", [be(3)]).unwrap();
-        // MAX + 3 wraps to 2.
-        assert_eq!(sum(&conn), Some(be(2)));
+        // MAX + 3 overflows: must raise, not wrap.
+        let err = conn
+            .query_row("SELECT u256_sum(x) FROM t", [], |r| {
+                r.get::<_, Option<Vec<u8>>>(0)
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("overflow"), "{err}");
+    }
+
+    #[test]
+    fn sums_to_u256_max_without_raising() {
+        let conn = setup();
+        // MAX - 1, then + 1 lands exactly on MAX: boundary must not raise.
+        let max_minus_one = (U256::MAX - U256::from(1u8)).to_be_bytes::<32>().to_vec();
+        conn.execute("INSERT INTO t VALUES (?1)", [max_minus_one])
+            .unwrap();
+        conn.execute("INSERT INTO t VALUES (?1)", [be(1)]).unwrap();
+        assert_eq!(sum(&conn), Some(U256::MAX.to_be_bytes::<32>().to_vec()));
     }
 }

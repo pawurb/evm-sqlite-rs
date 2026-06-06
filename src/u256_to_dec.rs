@@ -5,42 +5,21 @@
 //! coerced to a native number. `u256_to_dec` decodes the BLOB and returns the
 //! full-precision decimal string, e.g. `"2014847014830705"`.
 
-use ruint::aliases::U256;
 use rusqlite::functions::{Context, FunctionFlags};
-use rusqlite::types::{Value, ValueRef};
-use rusqlite::{Connection, Error, Result};
+use rusqlite::types::Value;
+use rusqlite::{Connection, Result};
 
-/// Decode the first argument as a big-endian uint256 BLOB and return its
-/// decimal string.
+use crate::args::arg_to_u256;
+
+/// Decode the first argument as a uint256 and return its decimal string.
 ///
-/// Accepts any blob up to 32 bytes, left-padding shorter ones (a 32-byte BE
-/// uint256 with leading zero bytes trimmed decodes to the same value). `NULL`
-/// propagates to `NULL`. A non-blob argument, or a blob longer than 32 bytes
-/// raises an error.
+/// Accepts a non-negative `INTEGER` or a big-endian `BLOB` of at most 32 bytes
+/// (left-padding shorter ones). `NULL` propagates to `NULL`; any other argument,
+/// or a blob longer than 32 bytes, raises an error.
 fn u256_to_dec(ctx: &Context<'_>) -> Result<Value> {
-    match ctx.get_raw(0) {
-        ValueRef::Null => Ok(Value::Null),
-        ValueRef::Blob(b) => {
-            // `from_be_slice` left-pads slices <= 32 bytes but panics on >32,
-            // so the upper-bound guard is required.
-            if b.len() > 32 {
-                return Err(Error::UserFunctionError(
-                    format!(
-                        "u256_to_dec: blob too large, expected <= 32 bytes, got {}",
-                        b.len()
-                    )
-                    .into(),
-                ));
-            }
-            Ok(Value::Text(U256::from_be_slice(b).to_string()))
-        }
-        other => Err(Error::UserFunctionError(
-            format!(
-                "u256_to_dec: expected a blob of at most 32 bytes, got {}",
-                other.data_type()
-            )
-            .into(),
-        )),
+    match arg_to_u256(ctx.get_raw(0), "u256_to_dec")? {
+        None => Ok(Value::Null),
+        Some(value) => Ok(Value::Text(value.to_string())),
     }
 }
 
@@ -56,6 +35,8 @@ pub(crate) fn register(conn: &Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use ruint::aliases::U256;
+
     use super::*;
 
     /// 32-byte big-endian encoding of a `u128`, for building test rows.
@@ -136,10 +117,19 @@ mod tests {
     }
 
     #[test]
-    fn integer_arg_raises() {
+    fn integer_arg_decodes() {
         let conn = setup();
-        let err = dec(&conn, Value::Integer(42)).unwrap_err();
-        assert!(err.to_string().contains("u256_to_dec"), "{err}");
+        assert_eq!(
+            dec(&conn, Value::Integer(42)).unwrap(),
+            Some("42".to_string())
+        );
+    }
+
+    #[test]
+    fn negative_integer_raises() {
+        let conn = setup();
+        let err = dec(&conn, Value::Integer(-1)).unwrap_err();
+        assert!(err.to_string().contains("negative"), "{err}");
     }
 
     #[test]

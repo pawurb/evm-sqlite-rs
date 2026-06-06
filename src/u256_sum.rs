@@ -8,14 +8,15 @@
 
 use ruint::aliases::U256;
 use rusqlite::functions::{Aggregate, Context, FunctionFlags};
-use rusqlite::types::ValueRef;
 use rusqlite::{Connection, Error, Result};
 
-/// Aggregate: sum 32-byte big-endian uint256 BLOBs into a 32-byte BE BLOB.
+use crate::args::arg_to_u256;
+
+/// Aggregate: sum uint256 operands into a 32-byte big-endian BLOB.
 ///
-/// Skips `NULL`. Accepts any blob up to 32 bytes, left-padding shorter ones
-/// Returns SQL `NULL` when no rows matched. Raises on a blob longer than 32
-/// bytes and if the running total would exceed `U256::MAX`.
+/// Each operand may be a non-negative `INTEGER` or a big-endian `BLOB` of at
+/// most 32 bytes. Skips `NULL`. Returns SQL `NULL` when no rows matched. Raises
+/// on an invalid operand and if the running total would exceed `U256::MAX`.
 struct U256Sum;
 
 impl Aggregate<U256, Option<Vec<u8>>> for U256Sum {
@@ -24,19 +25,8 @@ impl Aggregate<U256, Option<Vec<u8>>> for U256Sum {
     }
 
     fn step(&self, ctx: &mut Context<'_>, acc: &mut U256) -> Result<()> {
-        if let ValueRef::Blob(b) = ctx.get_raw(0) {
-            // `from_be_slice` left-pads slices <= 32 bytes but panics on >32, so
-            // reject oversized blobs loudly; they can't encode a uint256.
-            if b.len() > 32 {
-                return Err(Error::UserFunctionError(
-                    format!(
-                        "u256_sum: blob too large, expected <= 32 bytes, got {}",
-                        b.len()
-                    )
-                    .into(),
-                ));
-            }
-            *acc = acc.checked_add(U256::from_be_slice(b)).ok_or_else(|| {
+        if let Some(value) = arg_to_u256(ctx.get_raw(0), "u256_sum")? {
+            *acc = acc.checked_add(value).ok_or_else(|| {
                 Error::UserFunctionError("u256_sum: overflow past U256::MAX".into())
             })?;
         }
@@ -87,6 +77,17 @@ mod tests {
             conn.execute("INSERT INTO t VALUES (?1)", [be(n)]).unwrap();
         }
         assert_eq!(sum(&conn), Some(be(6)));
+    }
+
+    #[test]
+    fn sums_integer_operands() {
+        let conn = setup();
+        // Integer column values are summed (not silently treated as zero).
+        for n in [10i64, 20, 12] {
+            conn.execute("INSERT INTO t VALUES (?1)", [n]).unwrap();
+        }
+        conn.execute("INSERT INTO t VALUES (NULL)", []).unwrap();
+        assert_eq!(sum(&conn), Some(be(42)));
     }
 
     #[test]

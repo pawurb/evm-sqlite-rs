@@ -1,6 +1,7 @@
 //! SQLite helper functions for working with EVM chains data.
 
 mod args;
+mod erc20_to_real;
 mod format;
 mod u256_add;
 mod u256_mul;
@@ -19,5 +20,6 @@ pub fn register_functions(conn: &Connection) -> Result<()> {
     u256_mul::register(conn)?;
     u256_add::register(conn)?;
     format::register(conn)?;
+    erc20_to_real::register(conn)?;
     Ok(())
 }

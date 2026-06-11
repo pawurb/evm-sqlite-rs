@@ -49,7 +49,7 @@ fn format_units(value: U256, decimals: u32, display: u32) -> String {
 }
 
 /// Lossy `U256` -> `f64` via its decimal string.
-fn to_f64(value: U256) -> f64 {
+pub(crate) fn to_f64(value: U256) -> f64 {
     value.to_string().parse::<f64>().unwrap_or(f64::INFINITY)
 }
 

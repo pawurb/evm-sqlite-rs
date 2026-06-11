@@ -20,6 +20,7 @@ Most functions accept each operand either as a non-negative `INTEGER` or as a bi
 - `format_ether(x)` - scalar. Renders a wei amount as ether with 6 decimals, e.g. `"0.000141 ETH"`.
 - `format_gwei(x)` - scalar. Renders a wei amount as gwei with 2 decimals, e.g. `"30.00 gwei"`.
 - `format_usd(x, price)` - scalar. Renders `ether(x) * price` as `"$"` plus a 2-decimal value, e.g. `"$0.35"`. `price` is a real (or integer) USD price per token; a `NULL` amount or `NULL` price yields `NULL`. This is approximate: it goes through `f64`, since the price is itself a float. `format_ether`/`format_gwei` are exact.
+- `erc20_to_real(amount, decimals)` - scalar. Divides a uint256 token amount by `10^decimals` and returns a `REAL`, so numeric SQL works directly on it, e.g. `ROUND(erc20_to_real(u256_sum(amount), 6), 2)` for a USDC total. `decimals` must be an `INTEGER` in `0..=77`; a `NULL` amount or `NULL` decimals yields `NULL`. Approximate (`f64`, ~15-16 significant digits) - use `u256_to_dec` when the exact value matters.
 
 ## Usage
 

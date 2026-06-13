@@ -19,7 +19,8 @@ Most functions accept each operand either as a non-negative `INTEGER` or as a bi
 - `u256_to_dec(x)` - scalar. Decodes a uint256 to its full-precision decimal string (e.g. `"2014847014830705"`), since a u256 overflows SQLite's signed 64-bit `INTEGER`.
 - `format_ether(x)` - scalar. Renders a wei amount as ether with 6 decimals, e.g. `"0.000141 ETH"`.
 - `format_gwei(x)` - scalar. Renders a wei amount as gwei with 2 decimals, e.g. `"30.00 gwei"`.
-- `format_usd(x, price)` - scalar. Renders `ether(x) * price` as `"$"` plus a 2-decimal value, e.g. `"$0.35"`. `price` is a real (or integer) USD price per token; a `NULL` amount or `NULL` price yields `NULL`. This is approximate: it goes through `f64`, since the price is itself a float. `format_ether`/`format_gwei` are exact.
+- `convert_usd(x, price)` - scalar. Returns the USD value of a wei amount as a `REAL`, computed as `ether(x) * price`. `price` is a real (or integer) USD price per token; a `NULL` amount or `NULL` price yields `NULL`. Approximate: it goes through `f64`, since the price is itself a float.
+- `format_usd(x)` - scalar. Renders a USD value (a real or integer) as `"$"` plus a 2-decimal value with US-style thousands commas, e.g. `"$1,234,567.89"`. This is a pure formatter and does *not* convert from wei; compose it with `convert_usd`, e.g. `format_usd(convert_usd(wei, price))`. A `NULL` value yields `NULL`.
 - `erc20_to_real(amount, decimals)` - scalar. Divides a uint256 token amount by `10^decimals` and returns a `REAL`, so numeric SQL works directly on it, e.g. `ROUND(erc20_to_real(u256_sum(amount), 6), 2)` for a USDC total. `decimals` must be an `INTEGER` in `0..=77`; a `NULL` amount or `NULL` decimals yields `NULL`. Approximate (`f64`, ~15-16 significant digits) - use `u256_to_dec` when the exact value matters.
 
 ## Usage
@@ -41,7 +42,7 @@ let total: Option<String> = conn.query_row(
 // Compose arithmetic and rendering: gas cost in ether and in USD.
 let (eth, usd): (String, String) = conn.query_row(
     "SELECT format_ether(u256_mul(gas_used, effective_gas_price)), \
-            format_usd(u256_mul(gas_used, effective_gas_price), 2500.5) \
+            format_usd(convert_usd(u256_mul(gas_used, effective_gas_price), 2500.5)) \
      FROM transactions WHERE tx_hash = ?1",
     [tx_hash],
     |r| Ok((r.get(0)?, r.get(1)?)),

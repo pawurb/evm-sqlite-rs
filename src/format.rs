@@ -3,14 +3,20 @@
 //! These mirror the display formatting an EVM explorer applies to raw wei:
 //! - `format_ether(x)` -> ETH with 6 decimals, e.g. `"0.000141 ETH"`.
 //! - `format_gwei(x)`  -> gwei with 2 decimals, e.g. `"30.00 gwei"`.
-//! - `format_usd(x, price)` -> `"$"` + USD value with 2 decimals, approximated
-//!   as `ether(x) * price` via `f64` (the price is itself a float).
+//! - `format_usd(x)` -> `"$"` + the USD value with US-style thousands commas and
+//!   2 decimals, e.g. `"$1,234,567.89"`. This is a pure formatter: it does *not*
+//!   convert from wei. Pair it with `convert_usd` to turn a wei amount into a USD
+//!   value first, e.g. `format_usd(convert_usd(wei, price))`.
+//! - `convert_usd(wei, price)` -> the USD value of `wei` at `price` as a `REAL`,
+//!   approximated as `ether(wei) * price` via `f64` (the price is itself a float).
 //!
 //! `format_ether`/`format_gwei` use exact integer math, so even large uint256
 //! values render with correctly-rounded decimals.
 //!
-//! Each operand may be a non-negative `INTEGER` or a big-endian `BLOB` (<= 32
-//! bytes); a `NULL` amount (or, for `format_usd`, a `NULL` price) yields `NULL`.
+//! `format_ether`/`format_gwei`/`convert_usd` accept a non-negative `INTEGER` or
+//! a big-endian `BLOB` (<= 32 bytes) wei amount; `format_usd` takes a `REAL` or
+//! `INTEGER` USD value. A `NULL` amount (or, for `convert_usd`, a `NULL` price)
+//! yields `NULL`.
 
 use ruint::aliases::U256;
 use rusqlite::functions::{Context, FunctionFlags};
@@ -73,8 +79,45 @@ fn format_gwei(ctx: &Context<'_>) -> Result<Value> {
     }
 }
 
+/// Format a non-negative `f64` USD value as `"$"` + US-style thousands-separated
+/// integer part + `.` + 2 decimals, e.g. `1234567.891 -> "$1,234,567.89"`.
+fn format_usd_value(usd: f64) -> String {
+    let rounded = format!("{:.2}", usd);
+    let (int_part, frac_part) = rounded.split_once('.').unwrap_or((rounded.as_str(), "00"));
+
+    let mut grouped = String::new();
+    let bytes = int_part.as_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(*b as char);
+    }
+
+    format!("${grouped}.{frac_part}")
+}
+
 fn format_usd(ctx: &Context<'_>) -> Result<Value> {
-    let wei = match arg_to_u256(ctx.get_raw(0), "format_usd")? {
+    let usd = match ctx.get_raw(0) {
+        ValueRef::Null => return Ok(Value::Null),
+        ValueRef::Real(v) => v,
+        ValueRef::Integer(v) => v as f64,
+        other => {
+            return Err(Error::UserFunctionError(
+                format!(
+                    "format_usd: value must be a real or integer, got {}",
+                    other.data_type()
+                )
+                .into(),
+            ));
+        }
+    };
+
+    Ok(Value::Text(format_usd_value(usd)))
+}
+
+fn convert_usd(ctx: &Context<'_>) -> Result<Value> {
+    let wei = match arg_to_u256(ctx.get_raw(0), "convert_usd")? {
         None => return Ok(Value::Null),
         Some(wei) => wei,
     };
@@ -86,7 +129,7 @@ fn format_usd(ctx: &Context<'_>) -> Result<Value> {
         other => {
             return Err(Error::UserFunctionError(
                 format!(
-                    "format_usd: price must be a real or integer, got {}",
+                    "convert_usd: price must be a real or integer, got {}",
                     other.data_type()
                 )
                 .into(),
@@ -95,15 +138,17 @@ fn format_usd(ctx: &Context<'_>) -> Result<Value> {
     };
 
     let ether = to_f64(wei) / WEI_PER_ETHER;
-    Ok(Value::Text(format!("${:.2}", ether * price)))
+    Ok(Value::Real(ether * price))
 }
 
-/// Register the `format_ether`, `format_gwei`, and `format_usd` functions.
+/// Register the `format_ether`, `format_gwei`, `format_usd`, and `convert_usd`
+/// functions.
 pub(crate) fn register(conn: &Connection) -> Result<()> {
     let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
     conn.create_scalar_function("format_ether", 1, flags, format_ether)?;
     conn.create_scalar_function("format_gwei", 1, flags, format_gwei)?;
-    conn.create_scalar_function("format_usd", 2, flags, format_usd)?;
+    conn.create_scalar_function("format_usd", 1, flags, format_usd)?;
+    conn.create_scalar_function("convert_usd", 2, flags, convert_usd)?;
     Ok(())
 }
 
@@ -177,34 +222,62 @@ mod tests {
     }
 
     #[test]
-    fn usd_prefixes_dollar_and_rounds() {
+    fn usd_formats_with_commas_and_two_decimals() {
         let conn = setup();
-        // 0.000141166860953425 ETH * 2500.5 = $0.35.
-        let usd: Option<String> = conn
+        let small: Option<String> = conn
+            .query_row("SELECT format_usd(?1)", [0.35_f64], |r| r.get(0))
+            .unwrap();
+        assert_eq!(small, Some("$0.35".to_string()));
+
+        let big: Option<String> = conn
+            .query_row("SELECT format_usd(?1)", [1_234_567.891_f64], |r| r.get(0))
+            .unwrap();
+        assert_eq!(big, Some("$1,234,567.89".to_string()));
+
+        let thousand: Option<String> = conn
+            .query_row("SELECT format_usd(?1)", [1000_i64], |r| r.get(0))
+            .unwrap();
+        assert_eq!(thousand, Some("$1,000.00".to_string()));
+    }
+
+    #[test]
+    fn usd_null_value_yields_null() {
+        let conn = setup();
+        let null_value: Option<String> = conn
+            .query_row("SELECT format_usd(?1)", [Value::Null], |r| r.get(0))
+            .unwrap();
+        assert_eq!(null_value, None);
+    }
+
+    #[test]
+    fn convert_usd_multiplies_ether_by_price() {
+        let conn = setup();
+        // 0.000141166860953425 ETH * 2500.5 = ~0.353.
+        let usd: Option<f64> = conn
             .query_row(
-                "SELECT format_usd(?1, ?2)",
+                "SELECT convert_usd(?1, ?2)",
                 rusqlite::params![Value::Blob(be(141_166_860_953_425)), 2500.5_f64],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(usd, Some("$0.35".to_string()));
+        assert_eq!(usd.map(|v| format!("{:.2}", v)), Some("0.35".to_string()));
     }
 
     #[test]
-    fn usd_null_amount_or_price_yields_null() {
+    fn convert_usd_null_amount_or_price_yields_null() {
         let conn = setup();
-        let null_amount: Option<String> = conn
+        let null_amount: Option<f64> = conn
             .query_row(
-                "SELECT format_usd(?1, ?2)",
+                "SELECT convert_usd(?1, ?2)",
                 rusqlite::params![Value::Null, 2500.5_f64],
                 |r| r.get(0),
             )
             .unwrap();
         assert_eq!(null_amount, None);
 
-        let null_price: Option<String> = conn
+        let null_price: Option<f64> = conn
             .query_row(
-                "SELECT format_usd(?1, ?2)",
+                "SELECT convert_usd(?1, ?2)",
                 rusqlite::params![Value::Blob(be(1_000)), Value::Null],
                 |r| r.get(0),
             )
